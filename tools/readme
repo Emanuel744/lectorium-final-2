@@ -1,0 +1,50 @@
+# tools
+
+This folder contains admin scripts for the Lectorium project.
+
+## create_students.js
+
+Creates Firebase Auth users and corresponding `roles` documents in Firestore for students.
+
+Usage
+
+1. Install dependencies (in the `tools` folder):
+
+```powershell
+cd tools
+npm install
+```
+
+1. Prepare a service account JSON with appropriate permissions (Firebase Admin) and a CSV file `students.csv` with columns `name,email,password`.
+
+3. Run the script:
+
+```powershell
+node create_students.js --serviceAccount ./serviceAccountKey.json --input ./students.csv
+```
+
+Dry-run mode (no changes):
+
+```powershell
+node create_students.js --serviceAccount ./serviceAccountKey.json --input ./students.csv --dryRun
+```
+
+Confirm before making changes (interactive):
+
+```powershell
+node create_students.js --serviceAccount ./serviceAccountKey.json --input ./students.csv --confirm
+```
+
+Write a CSV summary of results:
+
+```powershell
+node create_students.js --serviceAccount ./serviceAccountKey.json --input ./students.csv --output ./results.csv
+```
+
+An example CSV is included as `example_students.csv` for reference.
+
+Notes
+
+- Keep the service account JSON secure. Do not commit it to source control.
+- The script will create Auth users, or reuse existing users if an account with the email already exists.
+- For each user it will create or update a document in the `roles` collection with `{ uid, email, role: 'estudiante', name }`.
