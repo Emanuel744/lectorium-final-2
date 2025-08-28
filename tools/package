@@ -1,0 +1,13 @@
+{
+  "name": "lectorium-tools",
+  "version": "1.0.0",
+  "description": "Admin tools for Lectorium (create students, sync roles)",
+  "main": "create_students.js",
+  "scripts": {
+    "create-students": "node create_students.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^11.10.0",
+    "csv-parse": "^5.3.6"
+  }
+}
