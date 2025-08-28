@@ -1,0 +1,161 @@
+/**
+ * tools/create_students.js
+ * Node script to create Auth users and role documents for students using Firebase Admin SDK.
+ * Usage: node create_students.js --serviceAccount ./serviceAccountKey.json --input ./students.csv
+ * The CSV should have columns: name,email,password
+ *
+ * NOTE: Run this in a secure environment. Keep service account JSON secret.
+ */
+
+const fs = require('fs');
+const path = require('path');
+const { parse } = require('csv-parse/sync');
+const admin = require('firebase-admin');
+
+function usage() {
+  console.log('Usage: node create_students.js --serviceAccount ./serviceAccountKey.json --input ./students.csv');
+  process.exit(1);
+}
+
+const args = process.argv.slice(2);
+let serviceAccountPath = null;
+let inputPath = null;
+let dryRun = false;
+let confirmFlag = false;
+let outputPath = null;
+
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--serviceAccount') serviceAccountPath = args[i+1];
+  if (args[i] === '--input') inputPath = args[i+1];
+  if (args[i] === '--dryRun') dryRun = true;
+  if (args[i] === '--confirm') confirmFlag = true;
+  if (args[i] === '--output') outputPath = args[i+1];
+}
+
+if (!serviceAccountPath || !inputPath) usage();
+
+if (!fs.existsSync(serviceAccountPath)) {
+  console.error('Service account file not found:', serviceAccountPath);
+  process.exit(1);
+}
+
+if (!fs.existsSync(inputPath)) {
+  console.error('Input file not found:', inputPath);
+  process.exit(1);
+}
+
+const serviceAccount = require(path.resolve(serviceAccountPath));
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+const db = admin.firestore();
+
+async function main() {
+  const content = fs.readFileSync(inputPath, 'utf8');
+  const records = parse(content, { columns: true, skip_empty_lines: true });
+  const results = [];
+
+  // If confirmFlag is set and not a dry run, ask for interactive confirmation
+  if (confirmFlag && !dryRun) {
+    const readline = require('readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await new Promise(resolve => rl.question('Confirmar creación de usuarios en Auth? (y/n): ', ans => { rl.close(); resolve(ans); }));
+    if (!answer || !answer.toLowerCase().startsWith('y')) {
+      console.log('Operación cancelada por el usuario. Ningún cambio fue realizado.');
+      process.exit(0);
+    }
+  }
+
+  for (const r of records) {
+    const name = r.name && r.name.trim();
+    const email = r.email && r.email.trim();
+    const password = r.password && r.password.trim() || 'ChangeMe123!';
+
+    if (!email) {
+      console.warn('Skipping row without email:', r);
+  results.push({ name, email: '', action: 'skipped', uid: '', message: 'missing email' });
+      continue;
+    }
+
+    // Basic validations
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      console.warn('Skipping invalid email format:', email);
+      continue;
+    }
+
+    if (password.length < 8) {
+      console.warn('Weak password for', email, '- must be at least 8 characters. Skipping.');
+  results.push({ name, email, action: 'skipped', uid: '', message: 'weak password' });
+  continue;
+    }
+
+    try {
+      if (dryRun) {
+        console.log('[dryRun] Would create user:', email);
+        results.push({ name, email, action: 'dry-run', uid: '', message: 'dry-run' });
+        continue;
+      }
+
+      // Create Auth user
+      let userRecord;
+      try {
+        userRecord = await admin.auth().createUser({
+          email,
+          emailVerified: false,
+          password,
+          displayName: name || 'Estudiante',
+          disabled: false
+        });
+        console.log('Created auth user:', email, userRecord.uid);
+      } catch (err) {
+        if (err.code === 'auth/email-already-exists') {
+          userRecord = await admin.auth().getUserByEmail(email);
+          console.log('User already exists, using uid:', userRecord.uid);
+        } else {
+          throw err;
+        }
+      }
+
+      // Create or update role doc in Firestore
+      const rolesRef = db.collection('roles');
+      const q = await rolesRef.where('email', '==', email).limit(1).get();
+      if (q.empty) {
+  await rolesRef.add({ uid: userRecord.uid, email, role: 'estudiante', name });
+  console.log('Role document created for', email);
+  results.push({ name, email, action: 'created', uid: userRecord.uid, message: 'created' });
+      } else {
+        const docRef = q.docs[0].ref;
+        await docRef.update({ uid: userRecord.uid, role: 'estudiante', name });
+  console.log('Role document updated for', email);
+  results.push({ name, email, action: 'updated', uid: userRecord.uid, message: 'updated role doc' });
+      }
+
+    } catch (err) {
+      console.error('Error processing', email, err);
+      results.push({ name, email, action: 'error', uid: '', message: err.message || String(err) });
+    }
+  }
+
+  // Write output CSV if requested
+  if (outputPath) {
+    try {
+      const outLines = ['name,email,action,uid,message'];
+      for (const r of results) {
+        outLines.push(`"${(r.name||'').replace(/"/g,'""')}","${(r.email||'').replace(/"/g,'""')}","${(r.action||'')}","${(r.uid||'')}","${(r.message||'')}"`);
+      }
+      fs.writeFileSync(outputPath, outLines.join('\n'), 'utf8');
+      console.log('Wrote results to', outputPath);
+    } catch (err) {
+      console.error('Error writing output CSV:', err);
+    }
+  }
+
+  console.log('Done');
+}
+
+main().catch(err => {
+  console.error('Fatal error', err);
+  process.exit(1);
+});
