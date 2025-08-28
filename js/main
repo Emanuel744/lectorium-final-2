@@ -1,0 +1,1847 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { 
+  getAuth, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut, 
+  onAuthStateChanged,
+  updateProfile
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { 
+  getFirestore, 
+  collection, 
+  getDocs, 
+  addDoc, 
+  query, 
+  where, 
+  orderBy, 
+  serverTimestamp,
+  doc,
+  updateDoc,
+  runTransaction,
+  getDoc,
+  limit
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+// Firebase config - Replace with your actual config
+const firebaseConfig = {
+  apiKey: "AIzaSyAQZwAqOUHYoz1zICz7PXJt01q0FEJa15o",
+  authDomain: "lectorium-a312d.firebaseapp.com",
+  projectId: "lectorium-a312d",
+  storageBucket: "lectorium-a312d.firebasestorage.app",
+  messagingSenderId: "177236654132",
+  appId: "1:177236654132:web:e00ecfcced130e89f0b261"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// Roles collection name
+const ROLES_COLLECTION = 'roles';
+
+// Global variables
+let currentUser = null;
+let books = [];
+let userLoans = [];
+let isLoginMode = true;
+let currentSection = 'dashboard';
+let currentUserRole = 'estudiante';
+
+// DOM elements
+const elements = {
+  // Theme
+  themeToggle: document.getElementById('themeToggle'),
+  themeIcon: document.getElementById('themeIcon'),
+  
+  // Navigation
+  navItems: document.querySelectorAll('.nav-item'),
+  contentSections: document.querySelectorAll('.content-section'),
+  
+  // Header
+  notificationBtn: document.getElementById('notificationBtn'),
+  notificationCount: document.getElementById('notificationCount'),
+  loginBtn: document.getElementById('loginBtn'),
+  userMenu: document.getElementById('userMenu'),
+  userMenuBtn: document.getElementById('userMenuBtn'),
+  userDropdown: document.getElementById('userDropdown'),
+  userEmail: document.getElementById('userEmail'),
+  dropdownName: document.getElementById('dropdownName'),
+  dropdownEmail: document.getElementById('dropdownEmail'),
+  profileBtn: document.getElementById('profileBtn'),
+  historyBtn: document.getElementById('historyBtn'),
+  logoutBtn: document.getElementById('logoutBtn'),
+  
+  // Hero
+  heroSearchInput: document.getElementById('heroSearchInput'),
+  heroTotalBooks: document.getElementById('heroTotalBooks'),
+  heroAvailableBooks: document.getElementById('heroAvailableBooks'),
+  heroActiveLoans: document.getElementById('heroActiveLoans'),
+  
+  // Dashboard
+  totalBooksCount: document.getElementById('totalBooksCount'),
+  availableBooksCount: document.getElementById('availableBooksCount'),
+  myLoansCount: document.getElementById('myLoansCount'),
+  dueSoonCount: document.getElementById('dueSoonCount'),
+  recentBooks: document.getElementById('recentBooks'),
+  
+  // Catalog
+  searchInput: document.getElementById('searchInput'),
+  categoryFilter: document.getElementById('categoryFilter'),
+  searchBtn: document.getElementById('searchBtn'),
+  activeFilters: document.getElementById('activeFilters'),
+  loadingBooks: document.getElementById('loadingBooks'),
+  booksGrid: document.getElementById('booksGrid'),
+  noResults: document.getElementById('noResults'),
+  
+  // Loans
+  loansContainer: document.getElementById('loansContainer'),
+  
+  // Analytics
+  topBooks: document.getElementById('topBooks'),
+  
+  // Chat
+  chatToggle: document.getElementById('chatToggle'),
+  chatWindow: document.getElementById('chatWindow'),
+  chatClose: document.getElementById('chatClose'),
+  chatInput: document.getElementById('chatInput'),
+  chatSend: document.getElementById('chatSend'),
+  chatMessages: document.getElementById('chatMessages'),
+  
+  // Auth Modal
+  authModal: document.getElementById('authModal'),
+  authForm: document.getElementById('authForm'),
+  authTitle: document.getElementById('authTitle'),
+  authSubtitle: document.getElementById('authSubtitle'),
+  authError: document.getElementById('authError'),
+  authSubmitBtn: document.getElementById('authSubmitBtn'),
+  authToggleBtn: document.getElementById('authToggleBtn'),
+  authCancelBtn: document.getElementById('authCancelBtn'),
+  nameField: document.getElementById('nameField'),
+  fullName: document.getElementById('fullName'),
+  email: document.getElementById('email'),
+  password: document.getElementById('password'),
+  togglePassword: document.getElementById('togglePassword'),
+  confirmPasswordField: document.getElementById('confirmPasswordField'),
+  confirmPassword: document.getElementById('confirmPassword'),
+  
+  // Book Modal
+  bookModal: document.getElementById('bookModal'),
+  bookModalContent: document.getElementById('bookModalContent'),
+  
+  // Toast
+  toastContainer: document.getElementById('toastContainer'),
+  
+  // Filters
+  filterBtns: document.querySelectorAll('.filter-btn')
+};
+
+// Admin UI element (button)
+elements.adminAddBookBtn = document.getElementById('adminAddBookBtn');
+
+// Helper: set role in Firestore (simple mapping email -> role doc)
+async function setUserRoleInFirestore(uid, email, role) {
+  try {
+    const roleRef = doc(db, ROLES_COLLECTION, uid);
+    await updateDoc(roleRef, { role });
+  } catch (e) {
+    // If doc doesn't exist, create it
+    try {
+      await addDoc(collection(db, ROLES_COLLECTION), { uid, email, role });
+    } catch (err) {
+      console.error('Error setting role:', err);
+    }
+  }
+}
+
+async function getUserRoleFromFirestore(uid) {
+  try {
+    const q = query(collection(db, ROLES_COLLECTION), where('uid', '==', uid), limit(1));
+    const snapshot = await getDocs(q);
+    if (!snapshot.empty) {
+      return snapshot.docs[0].data().role || 'estudiante';
+    }
+  } catch (err) {
+    console.error('Error getting user role:', err);
+  }
+  return 'estudiante';
+}
+
+// Create test accounts (idempotent): admin, profesor, estudiante
+async function ensureTestAccounts() {
+  const domain = ALLOWED_DOMAIN.replace('@', '');
+  const testUsers = [
+    { email: `admin@${domain}`, password: 'Test1234', role: 'admin', displayName: 'Admin Test' },
+    { email: `profesor@${domain}`, password: 'Test1234', role: 'profesor', displayName: 'Profesor Test' },
+    { email: `estudiante@${domain}`, password: 'Test1234', role: 'estudiante', displayName: 'Estudiante Test' }
+  ];
+
+  for (const u of testUsers) {
+    try {
+      // Attempt to create user - ignore if exists
+      await createUserWithEmailAndPassword(auth, u.email, u.password);
+      showNotification(`Cuenta creada: ${u.email}`, 'success');
+    } catch (err) {
+      // If user exists, Firebase returns auth/email-already-in-use; ignore
+    }
+
+    // We cannot set role via auth directly here without admin privileges; store role mapping in Firestore if missing
+    try {
+      // Check if role exists
+      const q = query(collection(db, ROLES_COLLECTION), where('email', '==', u.email), limit(1));
+      const snapshot = await getDocs(q);
+      if (snapshot.empty) {
+        await addDoc(collection(db, ROLES_COLLECTION), { uid: null, email: u.email, role: u.role });
+      }
+    } catch (err) {
+      console.error('Error ensuring role doc:', err);
+    }
+  }
+}
+
+// Initial books data
+const initialBooks = [
+  { 
+    titulo: "Cien Años de Soledad", 
+    autor: "Gabriel García Márquez", 
+    categoria: "moderno", 
+    disponible: true,
+    isbn: "978-0-06-088328-7",
+    año: 1967,
+    editorial: "Harper & Row",
+    paginas: 417,
+    descripcion: "La historia épica de la familia Buendía a lo largo de siete generaciones en el pueblo ficticio de Macondo.",
+    vecesPrestado: 0
+  },
+  { 
+    titulo: "Don Quijote de la Mancha", 
+    autor: "Miguel de Cervantes", 
+    categoria: "clasico", 
+    disponible: true,
+    isbn: "978-84-376-0494-7",
+    año: 1605,
+    editorial: "Francisco de Robles",
+    paginas: 1023,
+    descripcion: "Las aventuras del hidalgo Don Quijote y su fiel escudero Sancho Panza.",
+    vecesPrestado: 0
+  },
+  { 
+    titulo: "1984", 
+    autor: "George Orwell", 
+    categoria: "ficcion", 
+    disponible: true,
+    isbn: "978-0-452-28423-4",
+    año: 1949,
+    editorial: "Secker & Warburg",
+    paginas: 328,
+    descripcion: "Una distopía en la que un superestado totalitario controla cada aspecto de la vida.",
+    vecesPrestado: 0
+  },
+  { 
+    titulo: "El Principito", 
+    autor: "Antoine de Saint-Exupéry", 
+    categoria: "infantil", 
+    disponible: true,
+    isbn: "978-0-15-601219-5",
+    año: 1943,
+    editorial: "Reynal & Hitchcock",
+    paginas: 96,
+    descripcion: "Un piloto se encuentra en el desierto del Sahara con un pequeño príncipe de otro planeta.",
+    vecesPrestado: 0
+  },
+  { 
+    titulo: "Harry Potter y la Piedra Filosofal", 
+    autor: "J.K. Rowling", 
+    categoria: "juvenil", 
+    disponible: true,
+    isbn: "978-0-439-70818-8",
+    año: 1997,
+    editorial: "Bloomsbury",
+    paginas: 223,
+    descripcion: "Las aventuras de un joven mago en su primer año en Hogwarts.",
+    vecesPrestado: 0
+  },
+  { 
+    titulo: "Sapiens", 
+    autor: "Yuval Noah Harari", 
+    categoria: "ciencia", 
+    disponible: true,
+    isbn: "978-0-06-231609-7",
+    año: 2011,
+    editorial: "Harper",
+    paginas: 443,
+    descripcion: "Una breve historia de la humanidad desde la Edad de Piedra hasta el siglo XXI.",
+    vecesPrestado: 0
+  },
+  { 
+    titulo: "El Diario de Ana Frank", 
+    autor: "Ana Frank", 
+    categoria: "historia", 
+    disponible: true,
+    isbn: "978-0-553-29698-3",
+    año: 1947,
+    editorial: "Contact Publishing",
+    paginas: 283,
+    descripcion: "El diario íntimo de una niña judía durante la Segunda Guerra Mundial.",
+    vecesPrestado: 0
+  }
+];
+
+// Theme management
+function loadTheme() {
+  const savedTheme = localStorage.getItem('theme') || 'light';
+  document.documentElement.setAttribute('data-theme', savedTheme);
+  updateThemeIcon(savedTheme);
+}
+
+function toggleTheme() {
+  const currentTheme = document.documentElement.getAttribute('data-theme');
+  const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+  
+  document.documentElement.setAttribute('data-theme', newTheme);
+  localStorage.setItem('theme', newTheme);
+  updateThemeIcon(newTheme);
+}
+
+function updateThemeIcon(theme) {
+  elements.themeIcon.className = theme === 'light' 
+    ? 'fas fa-moon text-xl' 
+    : 'fas fa-sun text-xl text-yellow-400';
+}
+
+// Navigation
+function showSection(sectionName) {
+  // Update navigation
+  elements.navItems.forEach(item => {
+    item.classList.remove('active');
+    if (item.getAttribute('data-section') === sectionName) {
+      item.classList.add('active');
+    }
+  });
+
+  // Update content sections
+  elements.contentSections.forEach(section => {
+    section.classList.add('hidden');
+    if (section.id === sectionName) {
+      section.classList.remove('hidden');
+      section.classList.add('fade-in');
+    }
+  });
+
+  currentSection = sectionName;
+  
+  // Load specific section data
+  if (sectionName === 'analytics' && currentUser) {
+    setTimeout(initCharts, 100);
+  }
+}
+
+// Toast Notifications
+window.showNotification = function(message, type = 'info') {
+  const icons = {
+    success: 'fa-check-circle',
+    error: 'fa-exclamation-circle',
+    info: 'fa-info-circle',
+    warning: 'fa-exclamation-triangle'
+  };
+  
+  const colors = {
+    success: 'text-green-600',
+    error: 'text-red-600',
+    info: 'text-blue-600',
+    warning: 'text-yellow-600'
+  };
+  
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.innerHTML = `
+    <div class="flex items-center space-x-3">
+      <i class="fas ${icons[type]} ${colors[type]} text-xl" aria-hidden="true"></i>
+      <span class="font-medium">${message}</span>
+    </div>
+  `;
+  
+  elements.toastContainer.appendChild(toast);
+  
+  setTimeout(() => toast.classList.add('show'), 100);
+  
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+};
+
+// Initialize books collection
+async function initializeBooks() {
+  try {
+    const booksRef = collection(db, "libros");
+    const snapshot = await getDocs(booksRef);
+    
+    if (snapshot.empty) {
+      console.log('Initializing books collection...');
+      for (const book of initialBooks) {
+        await addDoc(booksRef, {
+          ...book,
+          fechaAgregado: serverTimestamp()
+        });
+      }
+      showNotification('Biblioteca inicializada con éxito', 'success');
+    }
+  } catch (error) {
+    console.error('Error initializing books:', error);
+    showNotification('Error al inicializar la biblioteca', 'error');
+  }
+}
+
+// Load books
+async function loadBooks() {
+  try {
+    elements.loadingBooks.classList.remove('hidden');
+    elements.booksGrid.classList.add('hidden');
+    
+    await initializeBooks();
+    
+  const snapshot = await getDocs(collection(db, "libros"));
+  books = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(b => !b._deleted);
+    
+    updateDashboardStats();
+    displayBooks(books);
+    displayRecentBooks();
+    
+    elements.loadingBooks.classList.add('hidden');
+    elements.booksGrid.classList.remove('hidden');
+  } catch (error) {
+    console.error('Error loading books:', error);
+    showNotification('Error al cargar los libros', 'error');
+    elements.loadingBooks.classList.add('hidden');
+  }
+}
+
+// Update dashboard statistics
+function updateDashboardStats() {
+  const totalBooks = books.length;
+  const availableBooks = books.filter(book => book.disponible).length;
+  const myLoans = userLoans.filter(loan => loan.estado === 'activo').length;
+  const dueSoon = userLoans.filter(loan => {
+    if (loan.estado !== 'activo') return false;
+    const daysLeft = calculateDaysLeft(loan.fechaVencimiento);
+    return daysLeft >= 0 && daysLeft <= 7;
+  }).length;
+  
+  // Update dashboard stats
+  elements.totalBooksCount.textContent = totalBooks;
+  elements.availableBooksCount.textContent = availableBooks;
+  elements.myLoansCount.textContent = myLoans;
+  elements.dueSoonCount.textContent = dueSoon;
+  
+  // Update hero stats
+  elements.heroTotalBooks.textContent = totalBooks;
+  elements.heroAvailableBooks.textContent = availableBooks;
+  elements.heroActiveLoans.textContent = myLoans;
+  
+  // Update notification count
+  if (dueSoon > 0) {
+    elements.notificationCount.textContent = dueSoon;
+    elements.notificationCount.classList.remove('hidden');
+  } else {
+    elements.notificationCount.classList.add('hidden');
+  }
+}
+
+// Display recent books
+function displayRecentBooks() {
+  const recentBooks = books
+    .sort((a, b) => (b.fechaAgregado?.seconds || 0) - (a.fechaAgregado?.seconds || 0))
+    .slice(0, 5);
+  
+  elements.recentBooks.innerHTML = recentBooks.map(book => `
+    <div class="flex items-center justify-between p-3 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg cursor-pointer" onclick="showBookDetails('${book.id}')">
+      <div>
+        <p class="font-semibold">${book.titulo}</p>
+        <p class="text-sm opacity-70">${book.autor}</p>
+      </div>
+      <span class="text-xs px-2 py-1 rounded-full ${book.disponible ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
+        ${book.disponible ? 'Disponible' : 'Prestado'}
+      </span>
+    </div>
+  `).join('');
+}
+
+// Display books
+function displayBooks(booksToShow) {
+  elements.booksGrid.innerHTML = '';
+  
+  if (booksToShow.length === 0) {
+    elements.noResults.classList.remove('hidden');
+    return;
+  }
+  
+  elements.noResults.classList.add('hidden');
+  
+  booksToShow.forEach(book => {
+    const card = document.createElement('div');
+    card.className = 'glass rounded-xl overflow-hidden book-card cursor-pointer';
+    
+    const categoryColors = {
+      clasico: 'from-amber-500 to-orange-600',
+      moderno: 'from-purple-500 to-pink-600',
+      ficcion: 'from-blue-500 to-indigo-600',
+      ciencia: 'from-green-500 to-teal-600',
+      historia: 'from-red-500 to-pink-600',
+      infantil: 'from-yellow-400 to-orange-500',
+      juvenil: 'from-pink-500 to-purple-600'
+    };
+    
+    const gradient = categoryColors[book.categoria] || 'from-gray-500 to-gray-600';
+    
+    card.innerHTML = `
+      <div class="relative">
+          <div class="bg-gradient-to-br ${gradient} h-48 flex items-center justify-center">
+          <i class="fas fa-book text-white text-5xl opacity-80" aria-hidden="true"></i>
+        </div>
+        <div class="absolute top-2 right-2 bg-${(book.availableCopies||0) > 0 ? 'green' : 'red'}-500 text-white px-2 py-1 rounded-full text-xs font-semibold">
+          ${(book.availableCopies||0) > 0 ? `Disponible (${book.availableCopies||0})` : 'Sin ejemplares'}
+        </div>
+      </div>
+      <div class="p-4">
+        <h3 class="font-semibold text-lg mb-1 line-clamp-1">${book.titulo}</h3>
+        <p class="text-sm opacity-70 mb-2">${book.autor}</p>
+        <p class="text-xs opacity-60 mb-3">ISBN: ${book.isbn || 'No disponible'}</p>
+        <div class="flex space-x-2">
+          <button onclick="event.stopPropagation(); ${(book.availableCopies||0) > 0 ? `requestBook('${book.id}')` : `showNotification('Este libro no tiene ejemplares disponibles', 'warning')`}" 
+            class="flex-1 bg-purple-600 text-white py-2 rounded-lg text-sm font-semibold micro-interaction ${(book.availableCopies||0) === 0 ? 'opacity-50 cursor-not-allowed' : ''}">
+            ${(book.availableCopies||0) > 0 ? 'Solicitar' : 'No disponible'}
+          </button>
+          <button onclick="event.stopPropagation(); showBookDetails('${book.id}')" class="p-2 glass rounded-lg micro-interaction" aria-label="Detalles del libro">
+            <i class="fas fa-info-circle" aria-hidden="true"></i>
+          </button>
+          ${currentUserRole === 'admin' ? `
+            <button onclick="event.stopPropagation(); window.deleteBook('${book.id}')" class="p-2 bg-red-600 text-white rounded-lg" aria-label="Borrar libro">
+              <i class="fas fa-trash" aria-hidden="true"></i>
+            </button>
+          ` : ''}
+        </div>
+      </div>
+    `;
+    
+    card.addEventListener('click', () => showBookDetails(book.id));
+    elements.booksGrid.appendChild(card);
+  });
+}
+
+// Show book details
+window.showBookDetails = function(bookId) {
+  const book = books.find(b => b.id === bookId);
+  if (!book) return;
+  
+  const categoryColors = {
+    clasico: 'from-amber-500 to-orange-600',
+    moderno: 'from-purple-500 to-pink-600',
+    ficcion: 'from-blue-500 to-indigo-600',
+    ciencia: 'from-green-500 to-teal-600',
+    historia: 'from-red-500 to-pink-600',
+    infantil: 'from-yellow-400 to-orange-500',
+    juvenil: 'from-pink-500 to-purple-600'
+  };
+  
+  const gradient = categoryColors[book.categoria] || 'from-gray-500 to-gray-600';
+  
+  elements.bookModalContent.innerHTML = `
+    <div class="flex justify-between items-start mb-6">
+      <h2 class="text-2xl font-bold tracking-tight">${book.titulo}</h2>
+      <button onclick="closeBookModal()" class="text-gray-400 hover:text-gray-600" aria-label="Cerrar detalle">
+        <i class="fas fa-times text-xl" aria-hidden="true"></i>
+      </button>
+    </div>
+    
+    <div class="grid md:grid-cols-2 gap-6">
+      <div>
+        <div class="bg-gradient-to-br ${gradient} h-64 rounded-lg mb-4 flex items-center justify-center">
+          <i class="fas fa-book text-white text-6xl opacity-80" aria-hidden="true"></i>
+        </div>
+        <div class="space-y-2 text-sm">
+          <p><span class="font-medium">Autor:</span> ${book.autor}</p>
+          <p><span class="font-medium">ISBN:</span> ${book.isbn || 'No disponible'}</p>
+          <p><span class="font-medium">Año:</span> ${book.año || 'No disponible'}</p>
+          <p><span class="font-medium">Editorial:</span> ${book.editorial || 'No disponible'}</p>
+          <p><span class="font-medium">Páginas:</span> ${book.paginas || 'No disponible'}</p>
+          <p><span class="font-medium">Categoría:</span> ${book.categoria}</p>
+          <p><span class="font-medium">Veces prestado:</span> ${book.vecesPrestado || 0}</p>
+        </div>
+      </div>
+      
+      <div>
+        <h3 class="font-semibold text-lg mb-3">Descripción</h3>
+        <p class="text-gray-600 dark:text-gray-400 mb-6 leading-relaxed">
+          ${book.descripcion || 'No hay descripción disponible para este libro.'}
+        </p>
+        
+        <div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mb-6">
+          <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">Estado del libro:</p>
+          <p class="text-lg font-semibold ${(book.availableCopies||0) > 0 ? 'text-green-600' : 'text-red-600'}">
+            ${(book.availableCopies||0) > 0 ? `✓ Disponible (${book.availableCopies||0} / ${book.copies||1})` : '✗ Sin ejemplares disponibles'}
+          </p>
+        </div>
+        
+        ${currentUser ? `
+          <button 
+            onclick="${(book.availableCopies||0) > 0 ? `requestBook('${book.id}'); closeBookModal();` : `showNotification('Este libro no tiene ejemplares disponibles', 'warning')`}" 
+            class="w-full bg-purple-600 text-white py-3 rounded-lg font-semibold micro-interaction ${(book.availableCopies||0) === 0 ? 'opacity-50 cursor-not-allowed' : ''}"
+          >
+            ${(book.availableCopies||0) > 0 ? 'Solicitar Préstamo' : 'No Disponible'}
+          </button>
+        ` : `
+          <button 
+            onclick="closeBookModal(); elements.authModal.classList.remove('hidden');" 
+            class="w-full bg-purple-600 text-white py-3 rounded-lg font-semibold micro-interaction"
+          >
+            Iniciar sesión para solicitar préstamo
+          </button>
+        `}
+      </div>
+    </div>
+  `;
+  
+  elements.bookModal.classList.remove('hidden');
+};
+
+window.closeBookModal = function() {
+  elements.bookModal.classList.add('hidden');
+};
+
+// Request book
+window.requestBook = async function(bookId) {
+  if (!currentUser) {
+    showNotification('Debes iniciar sesión para solicitar libros', 'warning');
+    elements.authModal.classList.remove('hidden');
+    return;
+  }
+  
+  try {
+    const book = books.find(b => b.id === bookId);
+    if (!book || !book.disponible) {
+      showNotification('Este libro no está disponible', 'error');
+      return;
+    }
+    
+    // Check if user already has this book
+    const loansRef = collection(db, "prestamos");
+    const q = query(loansRef, 
+      where("userId", "==", currentUser.uid),
+      where("libroId", "==", bookId),
+      where("estado", "==", "activo")
+    );
+    const existingLoans = await getDocs(q);
+    
+    if (!existingLoans.empty) {
+      showNotification('Ya tienes este libro en préstamo', 'warning');
+      return;
+    }
+    
+    // Check loan limit (max 3 books)
+    const activeLoansQuery = query(loansRef,
+      where("userId", "==", currentUser.uid),
+      where("estado", "==", "activo")
+    );
+    const activeLoans = await getDocs(activeLoansQuery);
+    
+    if (activeLoans.size >= 3) {
+      showNotification('Has alcanzado el límite de 3 préstamos activos', 'warning');
+      return;
+    }
+    
+    // Use a transaction to create the loan and decrement availableCopies atomically
+    try {
+  const bookRef = doc(db, "libros", bookId);
+  const loansCol = collection(db, "prestamos");
+  // pre-create a loan ref so we can show the ID after the transaction
+  const loanRef = doc(loansCol);
+  const loanIdCreated = loanRef.id;
+
+  await runTransaction(db, async (t) => {
+        const bookSnap = await t.get(bookRef);
+        if (!bookSnap.exists()) throw new Error('Libro no encontrado');
+        const bookData = bookSnap.data();
+        const available = bookData.availableCopies || 0;
+        if (available <= 0) throw new Error('No hay ejemplares disponibles');
+
+        // Re-check user doesn't already have the book inside transaction is not supported across collections easily
+        // We'll rely on the earlier pre-checks and enforce availability here.
+
+        // Decrement availableCopies and update metadata
+        t.update(bookRef, {
+          availableCopies: Math.max(available - 1, 0),
+          disponible: Math.max(available - 1, 0) > 0,
+          vecesPrestado: (bookData.vecesPrestado || 0) + 1
+        });
+
+        // Create loan doc (transactionally) using pre-generated ID
+        t.set(loanRef, {
+          userId: currentUser.uid,
+          userEmail: currentUser.email,
+          userName: currentUser.displayName || 'Usuario',
+          libroId: bookId,
+          titulo: book.titulo,
+          autor: book.autor,
+          isbn: book.isbn || 'No disponible',
+          fechaPrestamo: serverTimestamp(),
+          fechaVencimiento: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days
+          estado: "activo",
+          renovaciones: 0
+        });
+      });
+      // after successful transaction, show loan id
+      showNotification(`¡Préstamo exitoso! ID: ${loanIdCreated} — Tienes 14 días para devolver "${book.titulo}"`, 'success');
+      // store lastLoanId for UI if needed
+      window.lastLoanId = loanIdCreated;
+    } catch (err) {
+      console.error('Transaction failed requesting book:', err);
+      showNotification(err.message || 'Error al procesar el préstamo', 'error');
+      return;
+    }
+    await loadBooks();
+    await loadLoans();
+  } catch (error) {
+    console.error('Error requesting book:', error);
+    showNotification('Error al procesar el préstamo', 'error');
+  }
+};
+
+// Load user loans
+async function loadLoans() {
+  if (!currentUser) {
+    elements.loansContainer.innerHTML = `
+      <div class="text-center py-12">
+        <i class="fas fa-lock text-6xl opacity-20 mb-4" aria-hidden="true"></i>
+        <p class="text-xl font-semibold opacity-70">Inicia sesión para ver tus préstamos</p>
+      </div>
+    `;
+    return;
+  }
+  
+  try {
+    const q = query(
+      collection(db, "prestamos"),
+      where("userId", "==", currentUser.uid),
+      where("estado", "==", "activo"),
+      orderBy("fechaPrestamo", "desc")
+    );
+    
+    const snapshot = await getDocs(q);
+    userLoans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    // Automatic alerts for near-due/overdue loans (idempotent: create one alert per loan)
+    try {
+      for (const loan of userLoans) {
+        const daysLeft = calculateDaysLeft(loan.fechaVencimiento);
+        const isOverdue = daysLeft < 0;
+        const isNearDue = daysLeft >= 0 && daysLeft <= 3;
+        if (!isOverdue && !isNearDue) continue;
+
+        // Check if we've already created a due-type alert for this loan
+        const alertsRef = collection(db, 'alerts');
+        const aQ = query(alertsRef, where('loanId', '==', loan.id), where('type', '==', 'due'));
+        const aSnap = await getDocs(aQ);
+        if (aSnap.empty) {
+          const msg = isOverdue
+            ? `Tu préstamo de "${loan.titulo}" está vencido.`
+            : `Tu préstamo de "${loan.titulo}" vence en ${daysLeft} días.`;
+
+          await addDoc(alertsRef, {
+            loanId: loan.id,
+            libroId: loan.libroId || null,
+            uid: loan.userId || (currentUser && currentUser.uid) || null,
+            email: loan.userEmail || (currentUser && currentUser.email) || null,
+            type: 'due',
+            message: msg,
+            from: 'sistema',
+            createdAt: serverTimestamp(),
+            read: false
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Error creating automatic alerts:', err);
+    }
+
+    displayLoans();
+    updateDashboardStats();
+  } catch (error) {
+    console.error('Error loading loans:', error);
+    showNotification('Error al cargar los préstamos', 'error');
+  }
+}
+
+// View loans for a specific user (admin feature)
+async function viewLoansForUser({ uid, email }) {
+  try {
+    let q;
+    const loansRef = collection(db, 'prestamos');
+    if (uid) {
+      q = query(loansRef, where('userId', '==', uid), orderBy('fechaPrestamo', 'desc'));
+    } else if (email) {
+      q = query(loansRef, where('userEmail', '==', email), orderBy('fechaPrestamo', 'desc'));
+    } else {
+      showNotification('No hay identificador para buscar préstamos', 'warning');
+      return;
+    }
+
+    const snapshot = await getDocs(q);
+    const userLoansList = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // Reuse bookModal to show user loans
+    let html = `<div class="flex justify-between items-center mb-4"><h3 class="text-lg font-bold">Préstamos de ${email || uid}</h3><button onclick="closeBookModal()" class="text-gray-400"><i class="fas fa-times" aria-hidden="true"></i></button></div>`;
+    if (userLoansList.length === 0) {
+      html += `<div class="p-4">No hay préstamos encontrados</div>`;
+    } else {
+      html += userLoansList.map(l => `
+        <div class="glass rounded p-3 mb-2">
+          <div class="flex justify-between">
+            <div>
+              <div class="font-semibold">${l.titulo}</div>
+              <div class="text-sm opacity-70">${l.autor}</div>
+              <div class="text-xs mt-1">Vence: ${formatDate(l.fechaVencimiento)}</div>
+            </div>
+            <div class="flex flex-col items-end">
+              <div class="text-sm">Estado: ${l.estado}</div>
+              <button onclick="sendManualAlert('${l.userId}', '${l.userEmail}', 'Tu préstamo de ${l.titulo} requiere atención')" class="mt-2 btn-secondary text-sm">Enviar alerta</button>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    elements.bookModalContent.innerHTML = html;
+    elements.bookModal.classList.remove('hidden');
+  } catch (err) {
+    console.error('Error viewing loans for user', err);
+    showNotification('Error al obtener préstamos del usuario', 'error');
+  }
+}
+
+// Helper: send manual alert (used from admin loans view)
+window.sendManualAlert = async function(uid, email, message) {
+  try {
+    await addDoc(collection(db, 'alerts'), {
+      uid: uid || null,
+      email: email || null,
+      message: message || 'Alerta administrativa',
+      from: currentUser ? currentUser.email : 'admin',
+      createdAt: serverTimestamp(),
+      read: false
+    });
+    showNotification('Alerta enviada al usuario', 'success');
+  } catch (err) {
+    console.error('Error sending manual alert', err);
+    showNotification('Error al enviar alerta', 'error');
+  }
+}
+
+// Load alerts for current user and display in #userAlerts
+async function loadAlertsForCurrentUser() {
+  const alertsContainer = document.getElementById('userAlerts');
+  if (!alertsContainer) return;
+  alertsContainer.innerHTML = '';
+  try {
+    if (!currentUser) return;
+    const q = query(collection(db, 'alerts'), where('email', '==', currentUser.email));
+    const snap = await getDocs(q);
+    if (snap.empty) {
+      alertsContainer.innerHTML = '<div class="text-xs text-gray-500">No hay alertas</div>';
+      return;
+    }
+    snap.docs.forEach(docSnap => {
+      const a = docSnap.data();
+      const el = document.createElement('div');
+      el.className = 'p-2 mb-1 bg-yellow-50 border rounded text-xs';
+      el.textContent = a.message;
+      alertsContainer.appendChild(el);
+    });
+  } catch (err) {
+    console.error('Error loading alerts', err);
+  }
+}
+
+// Display loans
+function displayLoans() {
+  if (userLoans.length === 0) {
+    elements.loansContainer.innerHTML = `
+      <div class="text-center py-12">
+        <i class="fas fa-book-open text-6xl opacity-20 mb-4"></i>
+        <p class="text-xl font-semibold opacity-70">No tienes préstamos activos</p>
+        <p class="text-sm opacity-50 mt-2">¡Explora nuestro catálogo y encuentra tu próxima lectura!</p>
+      </div>
+    `;
+    return;
+  }
+  
+  elements.loansContainer.innerHTML = userLoans.map(loan => {
+    const daysLeft = calculateDaysLeft(loan.fechaVencimiento);
+    const isOverdue = daysLeft < 0;
+    const isNearDue = daysLeft >= 0 && daysLeft <= 3;
+    
+    return `
+      <div class="glass rounded-lg p-4 ${isOverdue ? 'border-2 border-red-500' : isNearDue ? 'border-2 border-yellow-500' : ''}">
+        <div class="flex justify-between items-start">
+          <div>
+            <h4 class="font-semibold text-lg">${loan.titulo}</h4>
+            <p class="text-sm opacity-70">${loan.autor}</p>
+            <div class="mt-2 space-y-1 text-sm">
+              <p><i class="fas fa-calendar-check mr-2" aria-hidden="true"></i>Prestado: ${formatDate(loan.fechaPrestamo)}</p>
+              <p><i class="fas fa-calendar-times mr-2" aria-hidden="true"></i>Vence: ${formatDate(loan.fechaVencimiento)}</p>
+              ${loan.renovaciones > 0 ? `<p><i class="fas fa-sync mr-2" aria-hidden="true"></i>Renovaciones: ${loan.renovaciones}/2</p>` : ''}
+            </div>
+            <div class="mt-3">
+              ${isOverdue ? 
+                `<span class="text-red-600 font-semibold"><i class="fas fa-exclamation-triangle mr-1" aria-hidden="true"></i>Vencido hace ${Math.abs(daysLeft)} días</span>` : 
+                isNearDue ?
+                `<span class="text-yellow-600 font-semibold"><i class="fas fa-clock mr-1" aria-hidden="true"></i>Vence en ${daysLeft} días</span>` :
+                `<span class="text-green-600 font-semibold"><i class="fas fa-check-circle mr-1" aria-hidden="true"></i>${daysLeft} días restantes</span>`
+              }
+            </div>
+          </div>
+          
+          <div class="flex flex-col space-y-2">
+            <button onclick="returnBook('${loan.id}', '${loan.libroId}')" 
+              class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold micro-interaction" aria-label="Devolver libro">
+              <i class="fas fa-undo mr-2" aria-hidden="true"></i>Devolver
+            </button>
+            ${!isOverdue && loan.renovaciones < 2 ? `
+              <button onclick="renewLoan('${loan.id}')" 
+                class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-semibold micro-interaction" aria-label="Renovar préstamo">
+                <i class="fas fa-sync mr-2" aria-hidden="true"></i>Renovar
+              </button>
+            ` : ''}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// Calculate days left
+function calculateDaysLeft(vencimiento) {
+  if (!vencimiento) return 0;
+  
+  let due;
+  if (vencimiento.toDate) {
+    due = vencimiento.toDate();
+  } else if (vencimiento.seconds) {
+    due = new Date(vencimiento.seconds * 1000);
+  } else if (vencimiento instanceof Date) {
+    due = vencimiento;
+  } else {
+    due = new Date(vencimiento);
+  }
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  due.setHours(0, 0, 0, 0);
+  
+  const diffTime = due - today;
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  return diffDays;
+}
+
+// Format date
+function formatDate(timestamp) {
+  if (!timestamp) return 'Fecha no disponible';
+  
+  let date;
+  if (timestamp.toDate) {
+    date = timestamp.toDate();
+  } else if (timestamp.seconds) {
+    date = new Date(timestamp.seconds * 1000);
+  } else if (timestamp instanceof Date) {
+    date = timestamp;
+  } else {
+    date = new Date(timestamp);
+  }
+  
+  return date.toLocaleDateString('es-ES', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+}
+
+// Return book
+window.returnBook = async function(loanId, bookId) {
+  if (confirm('¿Estás seguro de que deseas devolver este libro?')) {
+    try {
+      const loanRef = doc(db, "prestamos", loanId);
+      const bookRef = doc(db, "libros", bookId);
+
+      await runTransaction(db, async (t) => {
+        const loanSnap = await t.get(loanRef);
+        if (!loanSnap.exists()) throw new Error('Préstamo no encontrado');
+
+        // Mark loan returned
+        t.update(loanRef, {
+          estado: "devuelto",
+          fechaDevolucion: serverTimestamp()
+        });
+
+        // Increment available copies
+        const bookSnap = await t.get(bookRef);
+        if (!bookSnap.exists()) return; // book may have been deleted
+        const bookData = bookSnap.data();
+        const newAvailable = (bookData.availableCopies || 0) + 1;
+        t.update(bookRef, {
+          availableCopies: newAvailable,
+          disponible: newAvailable > 0
+        });
+      });
+
+      showNotification('Libro devuelto exitosamente', 'success');
+
+      await loadBooks();
+      await loadLoans();
+    } catch (error) {
+      console.error('Error returning book (transaction):', error);
+      showNotification('Error al devolver el libro', 'error');
+    }
+  }
+};
+
+// Renew loan
+window.renewLoan = async function(loanId) {
+  try {
+    const loan = userLoans.find(l => l.id === loanId);
+    if (!loan) return;
+    
+    if (loan.renovaciones >= 2) {
+      showNotification('Has alcanzado el límite de renovaciones', 'warning');
+      return;
+    }
+    
+    const newDueDate = new Date();
+    if (loan.fechaVencimiento.toDate) {
+      newDueDate.setTime(loan.fechaVencimiento.toDate().getTime());
+    } else if (loan.fechaVencimiento.seconds) {
+      newDueDate.setTime(loan.fechaVencimiento.seconds * 1000);
+    } else {
+      newDueDate.setTime(new Date(loan.fechaVencimiento).getTime());
+    }
+    newDueDate.setDate(newDueDate.getDate() + 7); // Add 7 days
+    
+    await updateDoc(doc(db, "prestamos", loanId), {
+      fechaVencimiento: newDueDate,
+      renovaciones: loan.renovaciones + 1
+    });
+    
+    showNotification('Préstamo renovado por 7 días adicionales', 'success');
+    await loadLoans();
+  } catch (error) {
+    console.error('Error renewing loan:', error);
+    showNotification('Error al renovar el préstamo', 'error');
+  }
+};
+
+// Search and filter
+elements.searchBtn.addEventListener('click', filterBooks);
+elements.searchInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') filterBooks();
+});
+elements.categoryFilter.addEventListener('change', filterBooks);
+
+// Hero search
+elements.heroSearchInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    const query = e.target.value.trim();
+    if (query) {
+      elements.searchInput.value = query;
+      showSection('catalogo');
+      setTimeout(() => filterBooks(), 100);
+    }
+  }
+});
+
+function filterBooks() {
+  const searchTerm = elements.searchInput.value.toLowerCase().trim();
+  const category = elements.categoryFilter.value;
+  
+  let filtered = books;
+  
+  if (searchTerm) {
+    filtered = filtered.filter(book => 
+      book.titulo.toLowerCase().includes(searchTerm) ||
+      book.autor.toLowerCase().includes(searchTerm) ||
+      (book.isbn && book.isbn.toLowerCase().includes(searchTerm))
+    );
+  }
+  
+  if (category) {
+    filtered = filtered.filter(book => book.categoria === category);
+  }
+  
+  displayBooks(filtered);
+  updateActiveFilters(searchTerm, category);
+}
+
+function updateActiveFilters(search, category) {
+  elements.activeFilters.innerHTML = '';
+  const filters = [];
+  
+  if (search) {
+    filters.push(`Búsqueda: "${search}"`);
+  }
+  
+  if (category) {
+    const categoryText = elements.categoryFilter.options[elements.categoryFilter.selectedIndex].text;
+    filters.push(`Categoría: ${categoryText}`);
+  }
+  
+  if (filters.length > 0) {
+    elements.activeFilters.classList.remove('hidden');
+    filters.forEach(filter => {
+      const chip = document.createElement('span');
+      chip.className = 'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 px-3 py-1 rounded-full text-sm font-medium';
+      chip.innerHTML = `
+        ${filter}
+          <button onclick="clearFilters()" class="ml-2 hover:text-purple-900" aria-label="Quitar filtros">
+              <i class="fas fa-times" aria-hidden="true"></i>
+            </button>
+      `;
+      elements.activeFilters.appendChild(chip);
+    });
+  } else {
+    elements.activeFilters.classList.add('hidden');
+  }
+}
+
+window.clearFilters = function() {
+  elements.searchInput.value = '';
+  elements.categoryFilter.value = '';
+  filterBooks();
+};
+
+// Initialize charts
+async function initCharts() {
+  // Monthly chart
+  const monthlyCtx = document.getElementById('monthlyChart');
+  if (monthlyCtx && Chart.getChart(monthlyCtx)) {
+    Chart.getChart(monthlyCtx).destroy();
+  }
+  
+  if (monthlyCtx) {
+    new Chart(monthlyCtx, {
+      type: 'line',
+      data: {
+        labels: ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun'],
+        datasets: [{
+          label: 'Préstamos',
+          data: [12, 19, 15, 25, 22, 30],
+          borderColor: 'rgb(37, 99, 235)',
+          backgroundColor: 'rgba(37, 99, 235, 0.1)',
+          tension: 0.4
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: false }
+        }
+      }
+    });
+  }
+  
+  // Category chart
+  const categoryCtx = document.getElementById('categoryChart');
+  if (categoryCtx && Chart.getChart(categoryCtx)) {
+    Chart.getChart(categoryCtx).destroy();
+  }
+  
+  if (categoryCtx) {
+    const categoryCount = {};
+    books.forEach(book => {
+      categoryCount[book.categoria] = (categoryCount[book.categoria] || 0) + 1;
+    });
+    
+    new Chart(categoryCtx, {
+      type: 'doughnut',
+      data: {
+        labels: Object.keys(categoryCount),
+        datasets: [{
+          data: Object.values(categoryCount),
+          backgroundColor: [
+            'rgba(37, 99, 235, 0.8)',
+            'rgba(16, 185, 129, 0.8)',
+            'rgba(245, 158, 11, 0.8)',
+            'rgba(239, 68, 68, 0.8)',
+            'rgba(168, 85, 247, 0.8)',
+            'rgba(236, 72, 153, 0.8)',
+            'rgba(6, 182, 212, 0.8)'
+          ]
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { position: 'bottom' }
+        }
+      }
+    });
+  }
+  
+  // Top books
+  const topBooks = books
+    .sort((a, b) => (b.vecesPrestado || 0) - (a.vecesPrestado || 0))
+    .slice(0, 5);
+  
+  elements.topBooks.innerHTML = topBooks.map((book, index) => `
+    <div class="flex items-center justify-between p-3 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
+      <div class="flex items-center space-x-3">
+        <span class="text-2xl font-bold text-purple-600">#${index + 1}</span>
+        <div>
+          <p class="font-semibold">${book.titulo}</p>
+          <p class="text-sm opacity-70">${book.autor}</p>
+        </div>
+      </div>
+      <span class="text-sm font-medium">${book.vecesPrestado || 0} préstamos</span>
+    </div>
+  `).join('');
+}
+
+// Auth functions
+const ALLOWED_DOMAIN = '@ieluiscarloslopez.edu.co';
+
+function isValidInstitutionalEmail(email) {
+  return email.toLowerCase().endsWith(ALLOWED_DOMAIN.toLowerCase());
+}
+
+// Auth form submission
+elements.authForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  
+  const email = elements.email.value.trim();
+  const password = elements.password.value;
+  
+  if (!email || !password) {
+    showAuthError('Por favor completa todos los campos');
+    return;
+  }
+  
+  if (!isValidInstitutionalEmail(email)) {
+    showAuthError(`Solo se permiten correos institucionales ${ALLOWED_DOMAIN}`);
+    return;
+  }
+  
+  try {
+    if (isLoginMode) {
+      await signInWithEmailAndPassword(auth, email, password);
+      showNotification('¡Bienvenido de nuevo!', 'success');
+    } else {
+      const fullName = elements.fullName.value.trim();
+      const confirmPassword = elements.confirmPassword.value;
+      
+      if (!fullName) {
+        showAuthError('Por favor ingresa tu nombre completo');
+        return;
+      }
+      
+      if (password !== confirmPassword) {
+        showAuthError('Las contraseñas no coinciden');
+        return;
+      }
+      
+      if (password.length < 6) {
+        showAuthError('La contraseña debe tener al menos 6 caracteres');
+        return;
+      }
+      
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      await updateProfile(userCredential.user, { displayName: fullName });
+      
+      showNotification('¡Cuenta creada exitosamente!', 'success');
+    }
+    
+    elements.authModal.classList.add('hidden');
+    clearAuthForm();
+  } catch (error) {
+    showAuthError(getAuthErrorMessage(error));
+  }
+});
+
+function showAuthError(message) {
+  elements.authError.textContent = message;
+  elements.authError.classList.remove('hidden');
+  setTimeout(() => elements.authError.classList.add('hidden'), 5000);
+}
+
+function clearAuthForm() {
+  elements.authForm.reset();
+  elements.authError.classList.add('hidden');
+}
+
+function getAuthErrorMessage(error) {
+  const errorMessages = {
+    'auth/user-not-found': `No existe una cuenta con este correo. Verifica que sea un correo ${ALLOWED_DOMAIN}`,
+    'auth/wrong-password': 'Contraseña incorrecta',
+    'auth/email-already-in-use': 'Este correo ya está registrado',
+    'auth/weak-password': 'La contraseña debe tener al menos 6 caracteres',
+    'auth/invalid-email': 'El correo electrónico no es válido',
+    'auth/too-many-requests': 'Demasiados intentos. Intenta más tarde'
+  };
+  
+  return errorMessages[error.code] || 'Error desconocido. Intenta nuevamente.';
+}
+
+// Toggle login/register
+elements.authToggleBtn.addEventListener('click', () => {
+  isLoginMode = !isLoginMode;
+  
+  if (isLoginMode) {
+    elements.authTitle.textContent = 'Iniciar Sesión';
+    elements.authSubtitle.textContent = 'Accede a la biblioteca digital';
+    elements.authSubmitBtn.textContent = 'Iniciar Sesión';
+    elements.authToggleBtn.textContent = '¿No tienes cuenta? Regístrate';
+    elements.nameField.classList.add('hidden');
+    elements.confirmPasswordField.classList.add('hidden');
+  } else {
+    elements.authTitle.textContent = 'Crear Cuenta';
+    elements.authSubtitle.textContent = 'Únete a la biblioteca digital';
+    elements.authSubmitBtn.textContent = 'Registrarse';
+    elements.authToggleBtn.textContent = '¿Ya tienes cuenta? Inicia sesión';
+    elements.nameField.classList.remove('hidden');
+    elements.confirmPasswordField.classList.remove('hidden');
+  }
+  
+  clearAuthForm();
+});
+
+// Password visibility toggle
+elements.togglePassword.addEventListener('click', () => {
+  const type = elements.password.type === 'password' ? 'text' : 'password';
+  elements.password.type = type;
+  elements.confirmPassword.type = type;
+  elements.togglePassword.innerHTML = `<i class="fas fa-eye${type === 'password' ? '' : '-slash'}" aria-hidden="true"></i>`;
+});
+
+// Auth state observer
+onAuthStateChanged(auth, async (user) => {
+  currentUser = user;
+  
+  if (user) {
+    elements.loginBtn.classList.add('hidden');
+    elements.userMenu.classList.remove('hidden');
+    
+    const displayName = user.displayName || user.email.split('@')[0];
+    elements.userEmail.textContent = displayName;
+    elements.dropdownName.textContent = displayName;
+    elements.dropdownEmail.textContent = user.email;
+    
+    // Determine role (try firestore mapping by uid or by email fallback)
+    currentUserRole = await getUserRoleFromFirestore(user.uid);
+    if (!currentUserRole || currentUserRole === 'estudiante') {
+      // fallback: try by email
+      try {
+        const q = query(collection(db, ROLES_COLLECTION), where('email', '==', user.email), limit(1));
+        const snap = await getDocs(q);
+        if (!snap.empty) currentUserRole = snap.docs[0].data().role || 'estudiante';
+      } catch (e) {
+        console.error('Role fallback error', e);
+      }
+    }
+
+    // Show admin UI when appropriate
+    if (currentUserRole === 'admin') {
+      if (elements.adminAddBookBtn) elements.adminAddBookBtn.classList.remove('hidden');
+    } else {
+      if (elements.adminAddBookBtn) elements.adminAddBookBtn.classList.add('hidden');
+    }
+
+    await loadLoans();
+  // Load user alerts (automatic/manual)
+  await loadAlertsForCurrentUser();
+  } else {
+    elements.loginBtn.classList.remove('hidden');
+    elements.userMenu.classList.add('hidden');
+    userLoans = [];
+  }
+  
+  updateDashboardStats();
+});
+
+// Chat functionality
+function toggleChat() {
+  const isVisible = !elements.chatWindow.classList.contains('hidden');
+  if (isVisible) {
+    elements.chatWindow.classList.add('hidden');
+  } else {
+    elements.chatWindow.classList.remove('hidden');
+  }
+}
+
+function sendMessage() {
+  const message = elements.chatInput.value.trim();
+  if (!message) return;
+
+  // Add user message
+  addChatMessage(message, 'user');
+  elements.chatInput.value = '';
+
+  // Simulate bot response
+  setTimeout(() => {
+    const responses = {
+      'hola': '¡Hola! ¿En qué puedo ayudarte hoy?',
+      'buscar': 'Puedes buscar recursos usando la barra de búsqueda principal o navegando por las diferentes secciones.',
+      'acceso': 'Para acceder a las bases de datos, ve a la sección "Bases de Datos" y haz clic en "Acceder" en el recurso que te interese.',
+      'prestamo': 'Para solicitar un préstamo, busca el libro en el catálogo y haz clic en "Solicitar". Necesitas iniciar sesión con tu correo institucional.',
+      'ayuda': 'Estoy aquí para ayudarte con cualquier duda sobre la biblioteca. Puedes preguntarme sobre búsquedas, acceso a recursos, o servicios.',
+      'default': 'Gracias por tu mensaje. ¿Puedes ser más específico sobre lo que necesitas? Puedo ayudarte con búsquedas, acceso a bases de datos, préstamos o información general.'
+    };
+
+    let response = responses.default;
+    const lowerMessage = message.toLowerCase();
+    
+    for (const key in responses) {
+      if (lowerMessage.includes(key)) {
+        response = responses[key];
+        break;
+      }
+    }
+
+    addChatMessage(response, 'bot');
+  }, 1000);
+}
+
+function addChatMessage(message, sender) {
+  const messageDiv = document.createElement('div');
+  messageDiv.className = `mb-3 ${sender === 'user' ? 'text-right' : ''}`;
+  
+  const messageBubble = document.createElement('div');
+  messageBubble.className = `inline-block p-3 rounded-lg max-w-xs text-sm ${
+    sender === 'user' 
+      ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-br-none' 
+      : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white rounded-bl-none'
+  }`;
+  messageBubble.textContent = message;
+  
+  messageDiv.appendChild(messageBubble);
+  elements.chatMessages.appendChild(messageDiv);
+  elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+}
+
+// Filter functionality for databases
+function handleFilterClick(filterBtn) {
+  elements.filterBtns.forEach(btn => btn.classList.remove('active'));
+  filterBtn.classList.add('active');
+  
+  const filterType = filterBtn.textContent.trim();
+  console.log('Filtering by:', filterType);
+  showNotification(`Filtrando por: ${filterType}`, 'info');
+}
+
+// Event listeners setup
+function setupEventListeners() {
+  // Theme toggle
+  elements.themeToggle.addEventListener('click', toggleTheme);
+
+  // Navigation
+  elements.navItems.forEach(item => {
+    item.addEventListener('click', () => {
+      const section = item.getAttribute('data-section');
+      showSection(section);
+    });
+    
+    // Add keyboard support
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        const section = item.getAttribute('data-section');
+        showSection(section);
+      }
+    });
+  });
+
+  // Auth events
+  elements.loginBtn.addEventListener('click', () => {
+    elements.authModal.classList.remove('hidden');
+  });
+
+  elements.authCancelBtn.addEventListener('click', () => {
+    elements.authModal.classList.add('hidden');
+    clearAuthForm();
+  });
+
+  elements.logoutBtn.addEventListener('click', async () => {
+    await signOut(auth);
+    showNotification('Sesión cerrada exitosamente', 'info');
+    showSection('dashboard');
+  });
+
+  elements.userMenuBtn.addEventListener('click', () => {
+    const isExpanded = !elements.userDropdown.classList.contains('hidden');
+    elements.userDropdown.classList.toggle('hidden');
+    elements.userMenuBtn.setAttribute('aria-expanded', !isExpanded);
+  });
+
+  // Chat events
+  elements.chatToggle.addEventListener('click', toggleChat);
+  elements.chatClose.addEventListener('click', toggleChat);
+  elements.chatSend.addEventListener('click', sendMessage);
+  elements.chatInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      sendMessage();
+    }
+  });
+
+  // Admin: open add-book modal
+  if (elements.adminAddBookBtn) {
+    elements.adminAddBookBtn.addEventListener('click', () => {
+      document.getElementById('adminAddModal').classList.remove('hidden');
+    });
+  }
+
+  const adminAddForm = document.getElementById('adminAddForm');
+  if (adminAddForm) {
+    adminAddForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      // Only admins
+      if (currentUserRole !== 'admin') {
+        showNotification('No tienes permiso para agregar libros', 'error');
+        return;
+      }
+
+    const title = document.getElementById('admin_title').value.trim();
+    const author = document.getElementById('admin_author').value.trim();
+    const isbn = document.getElementById('admin_isbn').value.trim();
+    const copies = parseInt(document.getElementById('admin_copies')?.value || '1', 10) || 1;
+    const category = document.getElementById('admin_category').value;
+    const description = document.getElementById('admin_description').value.trim();
+
+      try {
+        await addDoc(collection(db, 'libros'), {
+          titulo: title,
+          autor: author,
+          isbn: isbn,
+          categoria: category,
+          descripcion: description,
+          copies: copies,
+          availableCopies: copies,
+          disponible: copies > 0,
+          vecesPrestado: 0,
+          fechaAgregado: serverTimestamp()
+        });
+        showNotification('Libro agregado', 'success');
+        document.getElementById('adminAddModal').classList.add('hidden');
+        adminAddForm.reset();
+        await loadBooks();
+      } catch (err) {
+        console.error('Error adding book:', err);
+        showNotification('Error al agregar libro', 'error');
+      }
+    });
+
+    document.getElementById('adminAddCancel').addEventListener('click', () => {
+      document.getElementById('adminAddModal').classList.add('hidden');
+    });
+  }
+
+  // Delegate delete action: admin can delete a book by calling window.deleteBook(bookId)
+  window.deleteBook = async function(bookId) {
+    if (currentUserRole !== 'admin') {
+      showNotification('No tienes permiso para borrar libros', 'error');
+      return;
+    }
+
+    if (!confirm('¿Confirmar borrado del libro?')) return;
+
+    try {
+      // Hard delete the document
+      const bookRef = doc(db, 'libros', bookId);
+      await updateDoc(bookRef, { disponible: false });
+      // Actually delete the doc from Firestore
+      // Note: deleteDoc must be imported for hard delete; using update to a flag then delete
+      try {
+        // dynamic import of deleteDoc to avoid changing top imports list
+        const mod = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+        if (mod.deleteDoc) {
+          await mod.deleteDoc(bookRef);
+          showNotification('Libro eliminado permanentemente', 'success');
+        } else {
+          showNotification('Libro marcado como no disponible (no se pudo borrar)', 'warning');
+        }
+      } catch (e) {
+        console.error('Hard delete failed, preserving by flag:', e);
+        await updateDoc(bookRef, { _deleted: true });
+        showNotification('Libro marcado como eliminado', 'success');
+      }
+      await loadBooks();
+    } catch (err) {
+      console.error('Error deleting book:', err);
+      showNotification('Error al borrar libro', 'error');
+    }
+  };
+
+  // Admin users management UI handlers
+  const adminUsersBtn = document.getElementById('adminUsersBtn');
+  const adminUsersModal = document.getElementById('adminUsersModal');
+  const adminUsersClose = document.getElementById('adminUsersClose');
+  const rolesList = document.getElementById('rolesList');
+  const refreshRolesBtn = document.getElementById('refreshRolesBtn');
+  const createRoleBtn = document.getElementById('createRoleBtn');
+
+  if (adminUsersBtn) {
+    adminUsersBtn.addEventListener('click', () => adminUsersModal.classList.remove('hidden'));
+  }
+  if (adminUsersClose) {
+    adminUsersClose.addEventListener('click', () => adminUsersModal.classList.add('hidden'));
+  }
+
+  async function loadRolesList() {
+    rolesList.innerHTML = '<div>Cargando...</div>';
+    try {
+      const snapshot = await getDocs(collection(db, ROLES_COLLECTION));
+      if (snapshot.empty) {
+        rolesList.innerHTML = '<div class="text-sm text-gray-500">No hay roles definidos.</div>';
+        return;
+      }
+      rolesList.innerHTML = '';
+      snapshot.docs.forEach(docSnap => {
+        const d = docSnap.data();
+        const id = docSnap.id;
+        const row = document.createElement('div');
+        row.className = 'flex items-center justify-between p-2 border rounded';
+        row.innerHTML = `
+          <div>
+            <div class="font-medium">${d.email || d.uid || 'sin-identificador'}</div>
+            <div class="text-sm text-gray-500">uid: ${d.uid || 'null'}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <select data-id="${id}" class="role-select border px-2 py-1">
+              <option value="admin" ${d.role==='admin'?'selected':''}>admin</option>
+              <option value="profesor" ${d.role==='profesor'?'selected':''}>profesor</option>
+              <option value="estudiante" ${d.role==='estudiante'?'selected':''}>estudiante</option>
+            </select>
+            <button data-id="${id}" class="btn-secondary btn-role-save">Guardar</button>
+            <button data-id="${id}" class="btn-secondary btn-role-delete">Borrar</button>
+            <button data-email="${d.email||''}" data-uid="${d.uid||''}" class="btn-primary btn-view-loans">Ver préstamos</button>
+            <button data-email="${d.email||''}" data-uid="${d.uid||''}" class="btn-secondary btn-send-alert">Enviar alerta</button>
+          </div>
+        `;
+        rolesList.appendChild(row);
+      });
+
+      // Attach handlers
+      document.querySelectorAll('.btn-role-save').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.currentTarget.getAttribute('data-id');
+          const sel = document.querySelector(`select[data-id="${id}"]`);
+          const newRole = sel.value;
+          try {
+            await updateDoc(doc(db, ROLES_COLLECTION, id), { role: newRole });
+            showNotification('Rol actualizado', 'success');
+            loadRolesList();
+          } catch (err) {
+            console.error('Error updating role', err);
+            showNotification('Error al actualizar rol', 'error');
+          }
+        });
+      });
+
+      document.querySelectorAll('.btn-role-delete').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.currentTarget.getAttribute('data-id');
+          if (!confirm('¿Borrar este rol?')) return;
+          try {
+            await updateDoc(doc(db, ROLES_COLLECTION, id), { _deleted: true });
+            showNotification('Rol marcado como eliminado', 'success');
+            loadRolesList();
+          } catch (err) {
+            console.error('Error deleting role', err);
+            showNotification('Error al borrar rol', 'error');
+          }
+        });
+      });
+
+      // View loans per user
+      document.querySelectorAll('.btn-view-loans').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const email = e.currentTarget.getAttribute('data-email');
+          const uid = e.currentTarget.getAttribute('data-uid');
+          await viewLoansForUser({ uid, email });
+        });
+      });
+
+      // Send alert to user
+      document.querySelectorAll('.btn-send-alert').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const email = e.currentTarget.getAttribute('data-email');
+          const uid = e.currentTarget.getAttribute('data-uid');
+          const message = prompt('Mensaje de alerta a enviar:');
+          if (!message) return;
+          try {
+            await addDoc(collection(db, 'alerts'), {
+              uid: uid || null,
+              email: email || null,
+              message,
+              from: currentUser ? currentUser.email : 'admin',
+              createdAt: serverTimestamp(),
+              read: false
+            });
+            showNotification('Alerta enviada', 'success');
+          } catch (err) {
+            console.error('Error sending alert', err);
+            showNotification('Error al enviar alerta', 'error');
+          }
+        });
+      });
+
+    } catch (err) {
+      console.error('Error loading roles', err);
+      rolesList.innerHTML = '<div class="text-sm text-red-600">Error cargando roles</div>';
+    }
+  }
+
+  if (refreshRolesBtn) refreshRolesBtn.addEventListener('click', loadRolesList);
+  if (createRoleBtn) createRoleBtn.addEventListener('click', async () => {
+    const email = document.getElementById('newRoleEmail').value.trim();
+    const role = document.getElementById('newRoleSelect').value;
+    if (!email) { showNotification('Ingrese un correo', 'warning'); return; }
+    try {
+      await addDoc(collection(db, ROLES_COLLECTION), { uid: null, email, role });
+      showNotification('Rol creado', 'success');
+      document.getElementById('newRoleEmail').value = '';
+      loadRolesList();
+    } catch (err) {
+      console.error('Error creating role', err);
+      showNotification('Error al crear rol', 'error');
+    }
+  });
+
+  // Create student (adds role doc only)
+  const createStudentBtn = document.getElementById('createStudentBtn');
+  if (createStudentBtn) {
+    createStudentBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('newStudentName').value.trim();
+      const email = document.getElementById('newStudentEmail').value.trim();
+      if (!email || !name) { showNotification('Nombre y correo son obligatorios', 'warning'); return; }
+      if (!isValidInstitutionalEmail(email)) { showNotification('Correo debe ser institucional', 'warning'); return; }
+      try {
+        await addDoc(collection(db, ROLES_COLLECTION), { uid: null, email, role: 'estudiante', name });
+        showNotification('Estudiante creado (rol) en Firestore', 'success');
+        document.getElementById('newStudentName').value = '';
+        document.getElementById('newStudentEmail').value = '';
+        loadRolesList();
+      } catch (err) {
+        console.error('Error creating student role', err);
+        showNotification('Error al crear estudiante', 'error');
+      }
+    });
+  }
+
+  // When admin modal opens, load list
+  if (adminUsersModal) {
+    adminUsersModal.addEventListener('click', (e) => {
+      // prevent background click from closing modal if clicking inside content
+      if (e.target === adminUsersModal) adminUsersModal.classList.add('hidden');
+    });
+  }
+
+  // Filters for databases
+  elements.filterBtns.forEach(btn => {
+    btn.addEventListener('click', () => handleFilterClick(btn));
+    
+    // Add keyboard support for filter buttons
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handleFilterClick(btn);
+      }
+    });
+  });
+
+  // Profile and history buttons
+  elements.profileBtn.addEventListener('click', () => {
+    showNotification('Perfil en construcción', 'info');
+    elements.userDropdown.classList.add('hidden');
+  });
+
+  elements.historyBtn.addEventListener('click', () => {
+    showNotification('Historial en construcción', 'info');
+    elements.userDropdown.classList.add('hidden');
+  });
+
+  // Notification button
+  elements.notificationBtn.addEventListener('click', () => {
+    if (userLoans.length > 0) {
+      showSection('loans');
+    } else {
+      showNotification('No tienes notificaciones pendientes', 'info');
+    }
+  });
+
+  // Close dropdowns when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!elements.userMenu.contains(e.target)) {
+      elements.userDropdown.classList.add('hidden');
+    }
+  });
+
+  // Close modals on outside click
+  window.addEventListener('click', (e) => {
+    if (e.target === elements.authModal) {
+      elements.authModal.classList.add('hidden');
+      clearAuthForm();
+    }
+    if (e.target === elements.bookModal) {
+      elements.bookModal.classList.add('hidden');
+    }
+  });
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    // Escape key closes modals and chat
+    if (e.key === 'Escape') {
+      elements.authModal.classList.add('hidden');
+      elements.bookModal.classList.add('hidden');
+      elements.chatWindow.classList.add('hidden');
+    }
+    
+    // Ctrl/Cmd + K for search focus
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      if (currentSection === 'catalogo') {
+        elements.searchInput.focus();
+      } else {
+        elements.heroSearchInput.focus();
+      }
+    }
+  });
+}
+
+// Make showSection globally available
+window.showSection = showSection;
+
+// Initialize everything
+async function init() {
+  console.log('Inicializando Lectorium...');
+  
+  // Load theme
+  loadTheme();
+  
+  // Setup event listeners
+  setupEventListeners();
+  
+  // Load initial data
+  await ensureTestAccounts();
+  await loadBooks();
+  
+  if (currentUser) {
+    await loadLoans();
+  }
+  
+  // Show welcome notification
+  setTimeout(() => {
+    showNotification('¡Bienvenido a Lectorium!', 'success');
+  }, 1000);
+  
+  console.log('Lectorium iniciado correctamente');
+}
+
+// Start the application
+init();
