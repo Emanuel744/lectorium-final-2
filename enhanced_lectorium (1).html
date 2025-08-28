@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lectorium</title>
+    <!-- Tailwind (for utility classes) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-papP1X+..." crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Local styles (extracted) -->
+    <link rel="stylesheet" href="css/styles.css">
+  </head>
+  <body class="bg-gray-50 text-gray-900">
+    <div class="min-h-screen flex">
+      <!-- Sidebar -->
+      <aside class="w-64 p-6 bg-white border-r hidden md:block">
+        <h1 class="text-2xl font-bold mb-6">Lectorium</h1>
+        <nav class="space-y-2">
+          <button class="nav-item w-full text-left" data-section="dashboard">Inicio</button>
+          <button class="nav-item w-full text-left" data-section="catalogo">Catálogo</button>
+          <button class="nav-item w-full text-left" data-section="loans">Mis Préstamos</button>
+          <button class="nav-item w-full text-left" data-section="analytics">Analíticas</button>
+        </nav>
+      </aside>
+
+      <div class="flex-1">
+        <!-- Header -->
+        <header class="site-header flex items-center justify-between p-4 bg-white border-b">
+          <div class="flex items-center space-x-4">
+            <div class="site-logo">
+              <img src="assets/logo.png" alt="Lectorium" />
+            </div>
+            <div>
+              <div class="text-lg font-bold">Lectorium</div>
+              <div class="text-sm text-gray-500">Centro de Recursos para el Aprendizaje</div>
+            </div>
+            <div class="flex items-center space-x-3">
+              <button id="themeToggle" aria-label="Cambiar tema" class="p-2 rounded-md"><i id="themeIcon" class="fas fa-moon" aria-hidden="true"></i></button>
+              <div class="relative">
+                <button id="notificationBtn" aria-label="Notificaciones" class="p-2 rounded-md">
+                  <i class="fas fa-bell" aria-hidden="true"></i>
+                  <span id="notificationCount" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs px-1 rounded-full">0</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center space-x-3">
+            <button id="loginBtn" aria-label="Iniciar sesión" class="btn-secondary login-btn">Iniciar Sesión</button>
+            <button id="adminAddBookBtn" aria-label="Agregar libro" class="btn-primary hidden">Agregar libro</button>
+            <button id="adminUsersBtn" aria-label="Administrar usuarios" class="btn-secondary hidden">Usuarios</button>
+            <div id="userMenu" class="hidden relative">
+              <button id="userMenuBtn" aria-haspopup="true" aria-expanded="false" aria-label="Menú de usuario" class="p-2"> <span id="userEmail"></span></button>
+                <div id="userDropdown" class="hidden absolute right-0 mt-2 w-64 bg-white border rounded-md p-3">
+                <p id="dropdownName" class="font-semibold"></p>
+                <p id="dropdownEmail" class="text-sm opacity-70"></p>
+                <div id="userAlerts" class="mt-2 text-sm"></div>
+                <div class="mt-3 space-y-2">
+                  <button id="profileBtn" class="w-full text-left">Perfil</button>
+                  <button id="historyBtn" class="w-full text-left">Historial</button>
+                  <button id="logoutBtn" class="w-full text-left">Cerrar sesión</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <!-- Main content -->
+        <main class="p-6">
+          <!-- Hero: título, búsqueda rápida y stats principales -->
+          <div class="mb-6">
+            <div class="text-center mb-4">
+              <h1 class="hero-title">Lectorium</h1>
+              <p class="hero-subtitle">Accede a miles de recursos académicos, libros digitales, bases de datos especializadas y contenido multimedia educativo</p>
+            </div>
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div class="flex-1">
+                <input id="heroSearchInput" aria-label="Buscar rápido" class="w-full search-input px-4 py-3 rounded-lg" placeholder="Busca un libro, autor o ISBN (Ctrl/Cmd+K)" />
+              </div>
+              <div class="flex items-center space-x-4 mt-3 md:mt-0">
+                <div class="text-center">
+                  <div class="text-sm text-gray-200">Total</div>
+                  <div id="heroTotalBooks" class="text-xl font-bold">0</div>
+                </div>
+                <div class="text-center">
+                  <div class="text-sm text-gray-200">Disponibles</div>
+                  <div id="heroAvailableBooks" class="text-xl font-bold">0</div>
+                </div>
+                <div class="text-center">
+                  <div class="text-sm text-gray-200">Activos</div>
+                  <div id="heroActiveLoans" class="text-xl font-bold">0</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Hero / Dashboard -->
+          <section id="dashboard" class="content-section">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+              <div class="card">
+                <p class="text-sm">Total de libros</p>
+                <div id="totalBooksCount" class="stat-number">0</div>
+              </div>
+              <div class="card">
+                <p class="text-sm">Disponibles</p>
+                <div id="availableBooksCount" class="stat-number">0</div>
+              </div>
+              <div class="card">
+                <p class="text-sm">Mis préstamos</p>
+                <div id="myLoansCount" class="stat-number">0</div>
+              </div>
+            </div>
+
+            <div class="grid md:grid-cols-3 gap-6">
+              <div class="md:col-span-2">
+                <h2 class="section-title">Recientes</h2>
+                <div id="recentBooks" class="space-y-3"></div>
+              </div>
+              <div>
+                <h2 class="section-title">Notificaciones</h2>
+                <div id="notificationArea">
+                  <span id="dueSoonCount"></span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Catalog -->
+          <section id="catalogo" class="content-section hidden mt-8">
+            <div class="flex items-center gap-3 mb-4">
+              <input id="searchInput" aria-label="Buscar libros" class="search-input flex-1" placeholder="Buscar por título, autor o ISBN" />
+              <select id="categoryFilter" aria-label="Filtrar por categoría" class="px-3 py-2 border rounded">
+                <option value="">Todas</option>
+                <option value="clasico">Clásico</option>
+                <option value="moderno">Moderno</option>
+                <option value="ficcion">Ficción</option>
+                <option value="ciencia">Ciencia</option>
+                <option value="historia">Historia</option>
+                <option value="infantil">Infantil</option>
+                <option value="juvenil">Juvenil</option>
+              </select>
+              <button id="searchBtn" class="btn-primary">Buscar</button>
+            </div>
+
+            <div id="activeFilters" class="hidden mb-4" aria-live="polite"></div>
+            <div id="loadingBooks" class="hidden">Cargando...</div>
+            <div id="booksGrid" class="resource-grid"></div>
+            <div id="noResults" class="hidden">No se encontraron resultados</div>
+          </section>
+
+          <!-- Loans -->
+          <section id="loans" class="content-section hidden mt-8">
+            <h2 class="section-title">Mis préstamos</h2>
+            <div id="loansContainer" class="space-y-4"></div>
+          </section>
+
+          <!-- Analytics -->
+          <section id="analytics" class="content-section hidden mt-8">
+            <h2 class="section-title">Analíticas</h2>
+            <div class="grid md:grid-cols-2 gap-6">
+              <div class="card">
+                <canvas id="monthlyChart"></canvas>
+              </div>
+              <div class="card">
+                <canvas id="categoryChart"></canvas>
+              </div>
+            </div>
+            <div id="topBooks" class="mt-6"></div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+  <!-- Chat -->
+  <button id="chatToggle" aria-label="Abrir chat" class="chat-fab"><i class="fas fa-comment-dots" aria-hidden="true"></i></button>
+    <div id="chatWindow" class="hidden fixed bottom-20 right-6 w-80 bg-white border rounded-lg p-4" aria-hidden="true">
+      <div class="flex justify-between items-center mb-3">
+        <strong>Asistente</strong>
+  <button id="chatClose" aria-label="Cerrar chat"><i class="fas fa-times" aria-hidden="true"></i></button>
+      </div>
+      <div id="chatMessages" class="h-40 overflow-auto" aria-live="polite"></div>
+      <div class="mt-3 flex gap-2">
+        <input id="chatInput" aria-label="Mensaje de chat" class="flex-1 border rounded px-2 py-1" />
+        <button id="chatSend" aria-label="Enviar mensaje" class="btn-primary">Enviar</button>
+      </div>
+    </div>
+
+    <!-- Auth modal -->
+    <div id="authModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center" role="dialog" aria-modal="true">
+      <div class="bg-white rounded-lg p-6 w-full max-w-md">
+        <form id="authForm">
+          <h2 id="authTitle" class="text-xl font-bold">Iniciar Sesión</h2>
+          <p id="authSubtitle" class="text-sm opacity-70 mb-4">Accede a la biblioteca digital</p>
+          <div id="nameField" class="hidden mb-2"><input id="fullName" aria-label="Nombre completo" class="w-full border px-3 py-2" /></div>
+          <input id="email" type="email" aria-label="Correo institucional" class="w-full border px-3 py-2 mb-2" />
+          <div id="confirmPasswordField" class="hidden mb-2"><input id="confirmPassword" type="password" aria-label="Confirmar contraseña" class="w-full border px-3 py-2" /></div>
+          <input id="password" type="password" aria-label="Contraseña" class="w-full border px-3 py-2 mb-3" />
+          <div class="flex gap-2">
+            <button id="authSubmitBtn" type="submit" class="btn-primary">Enviar</button>
+            <button id="authToggleBtn" type="button" class="btn-secondary">Alternar</button>
+            <button id="authCancelBtn" type="button" class="btn-secondary">Cancelar</button>
+          </div>
+          <div id="authError" class="hidden text-red-600 mt-2" role="alert"></div>
+          <button id="togglePassword" type="button" aria-label="Mostrar contraseña" class="mt-3"><i class="fas fa-eye" aria-hidden="true"></i></button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Book modal -->
+    <div id="bookModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center" role="dialog" aria-modal="true">
+      <div id="bookModalContent" class="bg-white rounded-lg p-6 w-full max-w-4xl"></div>
+    </div>
+
+    <!-- Admin: Add Book modal -->
+    <div id="adminAddModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center" role="dialog" aria-modal="true">
+      <div class="bg-white rounded-lg p-6 w-full max-w-md">
+        <h2 class="text-lg font-bold mb-2">Agregar libro (Admin)</h2>
+        <form id="adminAddForm">
+          <input id="admin_title" class="w-full border px-3 py-2 mb-2" placeholder="Título" required />
+          <input id="admin_author" class="w-full border px-3 py-2 mb-2" placeholder="Autor" required />
+          <input id="admin_isbn" class="w-full border px-3 py-2 mb-2" placeholder="ISBN" />
+          <input id="admin_copies" type="number" min="1" value="1" class="w-full border px-3 py-2 mb-2" placeholder="Número de ejemplares" required />
+          <select id="admin_category" aria-label="Categoría del libro" class="w-full border px-3 py-2 mb-2">
+            <option value="clasico">Clásico</option>
+            <option value="moderno">Moderno</option>
+            <option value="ficcion">Ficción</option>
+            <option value="ciencia">Ciencia</option>
+            <option value="historia">Historia</option>
+            <option value="infantil">Infantil</option>
+            <option value="juvenil">Juvenil</option>
+          </select>
+          <textarea id="admin_description" class="w-full border px-3 py-2 mb-2" placeholder="Descripción"></textarea>
+          <div class="flex gap-2">
+            <button id="adminAddSubmit" type="submit" class="btn-primary">Agregar</button>
+            <button id="adminAddCancel" type="button" class="btn-secondary">Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Admin: Users / Roles modal -->
+    <div id="adminUsersModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center" role="dialog" aria-modal="true">
+      <div class="bg-white rounded-lg p-6 w-full max-w-3xl">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-lg font-bold">Gestión de Usuarios y Roles</h2>
+          <button id="adminUsersClose" aria-label="Cerrar" class="text-gray-600">Cerrar</button>
+        </div>
+        <div class="mb-3">
+          <button id="refreshRolesBtn" class="btn-primary">Actualizar listado</button>
+          <span class="ml-3 text-sm text-gray-500">Aquí puedes ver y editar roles (admin/profesor/estudiante). Para asignar UID automáticamente usa el script de sincronización en el servidor.</span>
+        </div>
+        <div id="rolesList" class="space-y-3 max-h-60 overflow-auto"></div>
+        <div class="mt-4">
+          <h3 class="font-semibold">Crear rol manual</h3>
+          <div class="grid grid-cols-3 gap-2 mt-2">
+            <input id="newRoleEmail" class="border px-3 py-2" placeholder="correo@dominio.edu" />
+            <select id="newRoleSelect" aria-label="Seleccionar rol" class="border px-3 py-2">
+              <option value="admin">admin</option>
+              <option value="profesor">profesor</option>
+              <option value="estudiante">estudiante</option>
+            </select>
+            <button id="createRoleBtn" class="btn-primary">Crear</button>
+          </div>
+        </div>
+        <div class="mt-4 border-t pt-3">
+          <h3 class="font-semibold">Crear estudiante (rol)</h3>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-2 mt-2">
+            <input id="newStudentName" class="border px-3 py-2 md:col-span-1" placeholder="Nombre completo" />
+            <input id="newStudentEmail" class="border px-3 py-2 md:col-span-1" placeholder="correo@dominio.edu" />
+            <button id="createStudentBtn" class="btn-primary md:col-span-1">Crear estudiante</button>
+          </div>
+          <div class="text-xs text-gray-500 mt-2">Nota: crea solo el documento de rol en Firestore; la cuenta en Auth debe crearse mediante consola o script de administración.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toasts -->
+    <div id="toastContainer" aria-live="polite" class="fixed top-6 right-6 space-y-2"></div>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+      <div class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div>
+          <h3 class="text-lg font-bold">Centro de Recursos para el Aprendizaje</h3>
+          <p class="text-sm opacity-70 mt-2">Acceso a libros, bases de datos y servicios de apoyo para la enseñanza y la investigación.</p>
+        </div>
+        <div>
+          <h4 class="font-semibold">Enlaces</h4>
+          <ul class="mt-2 space-y-1 text-sm opacity-80">
+            <li>Catálogo OPAC</li>
+            <li>Bases de Datos</li>
+            <li>Repositorio</li>
+            <li>Multimedia</li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="font-semibold">Contacto</h4>
+          <ul class="mt-2 text-sm opacity-80">
+            <li>lectoriumlbiblioteca@gmail.com</li>
+            <li>+57 313 6116029</li>
+            <li>Cartagena, Colombia</li>
+          </ul>
+        </div>
+      </div>
+    </footer>
+
+    <!-- Scripts -->
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
